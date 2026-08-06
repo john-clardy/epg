@@ -1,68 +1,103 @@
 name: update
+
 on:
   workflow_dispatch:
+    inputs:
+      epg_sites:
+        description: 'Comma-separated EPG sites, e.g. arirang.com,abc.net.au'
+        required: false
+        type: string
+
   schedule:
     - cron: '0 0 * * *'
+
 permissions:
   contents: read
+
 jobs:
   main:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: tibdex/github-app-token@v1.8.2
         if: ${{ !env.ACT }}
         id: create-app-token
         with:
           app_id: ${{ secrets.APP_ID }}
           private_key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         if: ${{ !env.ACT }}
         with:
           token: ${{ steps.create-app-token.outputs.token }}
+
       - name: setup git
         run: |
           git config user.name "iptv-bot[bot]"
           git config user.email "84861620+iptv-bot[bot]@users.noreply.github.com"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
+          cache: npm
+
       - name: install dependencies
         run: npm install
+
       - name: check *.channels.xml
         run: npm run channels:lint
+
       - name: update sites.md
         run: npm run sites:update
+
       - run: git status
+
       - name: commit changes to sites.md
         if: ${{ !env.ACT && github.ref == 'refs/heads/master' }}
         run: |
           FILE=SITES.md
-          CHANGED=$(git diff ${FILE})
+          CHANGED=$(git diff "${FILE}")
+
           if [ -n "${CHANGED}" ]; then
-            git add ${FILE}
-            git commit -m "[Bot] Update ${FILE}" -m "Committed by [iptv-bot](https://github.com/apps/iptv-bot) via [update](https://github.com/iptv-org/epg/actions/runs/${{ github.run_id }}) workflow." --no-verify
+            git add "${FILE}"
+            git commit \
+              -m "[Bot] Update ${FILE}" \
+              -m "Committed by [iptv-bot](https://github.com/apps/iptv-bot) via [update](https://github.com/iptv-org/epg/actions/runs/${{ github.run_id }}) workflow." \
+              --no-verify
             git push
           fi
+
       - name: load workers
         run: npm run workers:load
+
       - name: update guides.md
         run: npm run guides:update
+
       - run: git status
+
       - name: commit changes to guides.md
         if: ${{ !env.ACT && github.ref == 'refs/heads/master' }}
         run: |
           FILE=GUIDES.md
-          CHANGED=$(git diff ${FILE})
+          CHANGED=$(git diff "${FILE}")
+
           if [ -n "${CHANGED}" ]; then
-            git add ${FILE}
-            git commit -m "[Bot] Update ${FILE}" -m "Committed by [iptv-bot](https://github.com/apps/iptv-bot) via [update](https://github.com/iptv-org/epg/actions/runs/${{ github.run_id }}) workflow." --no-verify
+            git add "${FILE}"
+            git commit \
+              -m "[Bot] Update ${FILE}" \
+              -m "Committed by [iptv-bot](https://github.com/apps/iptv-bot) via [update](https://github.com/iptv-org/epg/actions/runs/${{ github.run_id }}) workflow." \
+              --no-verify
             git push
           fi
+
       - name: generate .api/guides.json
         run: npm run guides:export
+
       - run: git status
+
       - name: move .api/guides.json to iptv-org/api
         uses: JamesIves/github-pages-deploy-action@4.1.1
         if: ${{ !env.ACT && github.ref == 'refs/heads/master' }}
@@ -75,3 +110,61 @@ jobs:
           git-config-email: 84861620+iptv-bot[bot]@users.noreply.github.com
           commit-message: '[Bot] Deploy to iptv-org/api'
           clean: false
+
+      # -----------------------------------------------------------
+      # Generate XMLTV EPG files
+      # -----------------------------------------------------------
+
+      - name: resolve EPG sites
+        id: epg-config
+        shell: bash
+        env:
+          INPUT_SITES: ${{ inputs.epg_sites }}
+          DEFAULT_SITES: ${{ vars.EPG_SITES }}
+        run: |
+          SITES="${INPUT_SITES:-$DEFAULT_SITES}"
+
+          # Remove whitespace around the comma-separated values.
+          SITES="$(echo "$SITES" | tr -d '[:space:]')"
+
+          if [ -z "$SITES" ]; then
+            echo "No EPG sites configured."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Generating EPG for: $SITES"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "sites=$SITES" >> "$GITHUB_OUTPUT"
+
+      - name: create EPG output directory
+        if: ${{ steps.epg-config.outputs.enabled == 'true' }}
+        run: mkdir -p public/epg
+
+      - name: generate EPG
+        if: ${{ steps.epg-config.outputs.enabled == 'true' }}
+        run: |
+          npm run grab -- \
+            --sites="${{ steps.epg-config.outputs.sites }}" \
+            --output="public/epg/{site}.xml" \
+            --gzip \
+            --maxConnections=5
+
+      - name: list generated EPG files
+        if: ${{ steps.epg-config.outputs.enabled == 'true' }}
+        run: |
+          find public/epg \
+            -type f \
+            -maxdepth 1 \
+            -printf '%f %s bytes\n' \
+            | sort
+
+      - name: upload generated EPG
+        if: ${{ steps.epg-config.outputs.enabled == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: epg-${{ github.run_number }}
+          path: public/epg/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
