@@ -540,5 +540,7 @@ jobs:
             echo "No EPG changes to commit."
           else
             git commit -m "Update RU EPG"
+            git fetch origin master
+            git rebase origin/master
             git push origin HEAD:master
           fi
