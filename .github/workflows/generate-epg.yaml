@@ -1,19 +1,25 @@
-name: Generate EPG
+name: Generate EPG US
 
 on:
   workflow_dispatch:
+
   schedule:
-    - cron: "0 0 * * *"
+    # Every day at 06:00 UTC
+    - cron: "0 6 * * *"
 
 permissions:
   contents: write
 
 jobs:
   generate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
 
     steps:
+      # ==========================================================
+      # SETUP
+      # ==========================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -28,68 +34,468 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check EPG site configuration
-        env:
-          EPG_SITES: ${{ vars.EPG_SITES }}
-        run: |
-          if [ -z "$EPG_SITES" ]; then
-            echo "::error::EPG_SITES is not configured."
-            echo "::error::Add it under Settings > Secrets and variables > Actions > Variables."
-            exit 1
-          fi
+      # ==========================================================
+      # DOWNLOAD CURRENT IPTV-ORG US PLAYLIST
+      # ==========================================================
 
-          echo "Configured sites: $EPG_SITES"
+      - name: Download US playlist
+        run: |
+          mkdir -p temp
+
+          curl \
+            --fail \
+            --location \
+            --retry 3 \
+            --retry-delay 5 \
+            "https://iptv-org.github.io/iptv/countries/us.m3u" \
+            --output temp/us.m3u
+
+          echo "Downloaded US playlist:"
+          ls -lh temp/us.m3u
+
+      # ==========================================================
+      # BUILD CUSTOM CHANNEL LIST
+      #
+      # Priority:
+      #
+      # 1. TVPassport
+      # 2. Pluto
+      # 3. Plex
+      # 4. Xumo
+      # 5. DistroTV
+      #
+      # Once a tvg-id is matched, lower-priority sources will
+      # not be used for that same channel.
+      # ==========================================================
+
+      - name: Build custom US EPG channel list
+        shell: bash
+        run: |
+          python3 <<'PY'
+          import re
+          import copy
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          PLAYLIST = Path("temp/us.m3u")
+          OUTPUT = Path("temp/us.channels.xml")
+          UNMATCHED = Path("temp/us.unmatched.txt")
+          REPORT = Path("temp/us.match-report.txt")
+
+          # ------------------------------------------------------
+          # EPG sources in priority order
+          # ------------------------------------------------------
+
+          SOURCES = [
+              (
+                  "tvpassport.com",
+                  Path(
+                      "sites/tvpassport.com/"
+                      "tvpassport.com.channels.xml"
+                  )
+              ),
+              (
+                  "pluto.tv",
+                  Path(
+                      "sites/pluto.tv/"
+                      "pluto.tv.channels.xml"
+                  )
+              ),
+              (
+                  "plex.tv",
+                  Path(
+                      "sites/plex.tv/"
+                      "plex.tv.channels.xml"
+                  )
+              ),
+              (
+                  "xumo.tv",
+                  Path(
+                      "sites/xumo.tv/"
+                      "xumo.tv.channels.xml"
+                  )
+              ),
+              (
+                  "distro.tv",
+                  Path(
+                      "sites/distro.tv/"
+                      "distro.tv.channels.xml"
+                  )
+              ),
+          ]
+
+          # ------------------------------------------------------
+          # Extract tvg-id values from playlist
+          # ------------------------------------------------------
+
+          playlist_ids = set()
+
+          with PLAYLIST.open(
+              "r",
+              encoding="utf-8",
+              errors="ignore"
+          ) as f:
+
+              for line in f:
+
+                  if not line.startswith("#EXTINF"):
+                      continue
+
+                  match = re.search(
+                      r'tvg-id="([^"]*)"',
+                      line
+                  )
+
+                  if not match:
+                      continue
+
+                  tvg_id = match.group(1).strip()
+
+                  if tvg_id:
+                      playlist_ids.add(tvg_id)
+
+          print()
+          print(
+              f"Playlist IDs: {len(playlist_ids)}"
+          )
+          print()
+
+          if not playlist_ids:
+              raise SystemExit(
+                  "ERROR: No tvg-id values found in playlist."
+              )
+
+          # ------------------------------------------------------
+          # Match playlist IDs
+          # ------------------------------------------------------
+
+          matched = {}
+          stats = {}
+
+          for site, path in SOURCES:
+
+              if not path.exists():
+
+                  print(
+                      f"WARNING: {path} does not exist."
+                  )
+
+                  stats[site] = 0
+                  continue
+
+              print(
+                  f"Scanning {site}..."
+              )
+
+              tree = ET.parse(path)
+              root = tree.getroot()
+
+              count = 0
+
+              for channel in root.findall("channel"):
+
+                  xmltv_id = (
+                      channel.get("xmltv_id") or ""
+                  ).strip()
+
+                  if not xmltv_id:
+                      continue
+
+                  # Not in the IPTV playlist
+                  if xmltv_id not in playlist_ids:
+                      continue
+
+                  # Already supplied by a higher-priority
+                  # provider.
+                  if xmltv_id in matched:
+                      continue
+
+                  matched[xmltv_id] = (
+                      site,
+                      copy.deepcopy(channel)
+                  )
+
+                  count += 1
+
+              stats[site] = count
+
+              print(
+                  f"  Added {count} channels"
+              )
+
+          # ------------------------------------------------------
+          # Determine unmatched channels
+          # ------------------------------------------------------
+
+          unmatched = sorted(
+              playlist_ids - set(matched.keys())
+          )
+
+          # ------------------------------------------------------
+          # Write combined channels XML
+          # ------------------------------------------------------
+
+          output_root = ET.Element("channels")
+
+          for xmltv_id in sorted(matched):
+
+              site, channel = matched[xmltv_id]
+
+              # The original channel already contains:
+              #
+              # site
+              # lang
+              # xmltv_id
+              # site_id
+              #
+              # Preserve all of it.
+
+              output_root.append(channel)
+
+          ET.indent(
+              output_root,
+              space="  "
+          )
+
+          tree = ET.ElementTree(
+              output_root
+          )
+
+          with OUTPUT.open("wb") as f:
+
+              f.write(
+                  b'<?xml version="1.0" '
+                  b'encoding="UTF-8"?>\n'
+              )
+
+              tree.write(
+                  f,
+                  encoding="utf-8",
+                  xml_declaration=False
+              )
+
+              f.write(b"\n")
+
+          # ------------------------------------------------------
+          # Write unmatched IDs
+          # ------------------------------------------------------
+
+          UNMATCHED.write_text(
+              "\n".join(unmatched) + "\n",
+              encoding="utf-8"
+          )
+
+          # ------------------------------------------------------
+          # Write report
+          # ------------------------------------------------------
+
+          report = []
+
+          report.append(
+              f"Playlist channels: {len(playlist_ids)}"
+          )
+
+          report.append("")
+
+          for site, _ in SOURCES:
+
+              report.append(
+                  f"{site}: {stats.get(site, 0)}"
+              )
+
+          report.append("")
+
+          report.append(
+              f"Total matched: {len(matched)}"
+          )
+
+          report.append(
+              f"Total unmatched: {len(unmatched)}"
+          )
+
+          REPORT.write_text(
+              "\n".join(report) + "\n",
+              encoding="utf-8"
+          )
+
+          # ------------------------------------------------------
+          # Console summary
+          # ------------------------------------------------------
+
+          print()
+          print("=" * 60)
+          print("MATCH RESULTS")
+          print("=" * 60)
+
+          for line in report:
+              print(line)
+
+          print("=" * 60)
+
+          if not matched:
+              raise SystemExit(
+                  "ERROR: No playlist channels matched "
+                  "any EPG source."
+              )
+
+          PY
+
+      # ==========================================================
+      # SHOW MATCH RESULTS
+      # ==========================================================
+
+      - name: Show match report
+        run: |
+          echo
+          cat temp/us.match-report.txt
+          echo
+
+          echo "First 50 unmatched channels:"
+          echo "--------------------------------"
+
+          head -50 temp/us.unmatched.txt || true
+
+      # ==========================================================
+      # VALIDATE CUSTOM CHANNEL FILE
+      # ==========================================================
+
+      - name: Validate custom channel file
+        run: |
+          echo "Channels that will be grabbed:"
+
+          grep -c \
+            "<channel " \
+            temp/us.channels.xml
+
+          echo
+          echo "Source breakdown:"
+
+          grep -o \
+            'site="[^"]*"' \
+            temp/us.channels.xml \
+            | sort \
+            | uniq -c \
+            | sort -nr
+
+      # ==========================================================
+      # PREPARE OUTPUT
+      # ==========================================================
 
       - name: Prepare EPG directory
         run: |
-          rm -rf public/epg
           mkdir -p public/epg
 
-      - name: Generate EPG
-        env:
-          EPG_SITES: ${{ vars.EPG_SITES }}
+          rm -f \
+            public/epg/us.xml \
+            public/epg/us.xml.gz
+
+      # ==========================================================
+      # GENERATE ONE COMBINED US GUIDE
+      # ==========================================================
+
+      - name: Generate US EPG
         run: |
-          npm run grab -- \
-            --sites="$EPG_SITES" \
-            --output="public/epg/{site}.xml" \
+          time npm run grab -- \
+            --channels="temp/us.channels.xml" \
+            --output="public/epg/us.xml" \
             --gzip \
-            --maxConnections=5
+            --days=3 \
+            --maxConnections=3
 
-      - name: Verify generated files
+      # ==========================================================
+      # VERIFY GUIDE
+      # ==========================================================
+
+      - name: Verify generated guide
         run: |
-          echo "Generated files:"
+          echo
+          echo "Generated EPG:"
+          echo "--------------------------------"
 
-          find public/epg \
-            -maxdepth 1 \
-            -type f \
-            -printf "%f - %s bytes\n" \
-            | sort
+          ls -lh \
+            public/epg/us.xml \
+            public/epg/us.xml.gz
 
-          if ! find public/epg -maxdepth 1 -type f -name "*.xml*" | grep -q .; then
-            echo "::error::No EPG files were generated."
+          if [ ! -s "public/epg/us.xml" ]; then
+
+            echo \
+              "::error::public/epg/us.xml was not generated."
+
             exit 1
+
           fi
 
-      - name: Commit EPG files
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ ! -s "public/epg/us.xml.gz" ]; then
 
-          git add public/epg
+            echo \
+              "::error::public/epg/us.xml.gz was not generated."
 
-          if git diff --cached --quiet; then
-            echo "No EPG changes to commit."
-          else
-            git commit -m "Update generated EPG"
-            git pull --rebase origin master
-            git push origin HEAD:master
+            exit 1
+
           fi
 
-      - name: Upload EPG artifact
+          echo
+          echo "Programme count:"
+          grep -c \
+            "<programme " \
+            public/epg/us.xml \
+            || true
+
+          echo
+          echo "Channel count:"
+          grep -c \
+            "<channel " \
+            public/epg/us.xml \
+            || true
+
+      # ==========================================================
+      # UPLOAD DIAGNOSTIC REPORT
+      # ==========================================================
+
+      - name: Upload match report
         uses: actions/upload-artifact@v4
         with:
-          name: epg-${{ github.run_number }}
-          path: public/epg/
-          if-no-files-found: error
+          name: us-epg-report-${{ github.run_number }}
+          path: |
+            temp/us.channels.xml
+            temp/us.unmatched.txt
+            temp/us.match-report.txt
           retention-days: 7
-          compression-level: 0
+
+      # ==========================================================
+      # COMMIT FINAL GUIDE
+      # ==========================================================
+
+      - name: Commit EPG
+        run: |
+          git config \
+            user.name \
+            "github-actions[bot]"
+
+          git config \
+            user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            public/epg/us.xml \
+            public/epg/us.xml.gz
+
+          if git diff --cached --quiet; then
+
+            echo "No EPG changes to commit."
+
+          else
+
+            git commit \
+              -m "Update US EPG"
+
+            git pull \
+              --rebase \
+              origin \
+              master
+
+            git push \
+              origin \
+              HEAD:master
+
+          fi
