@@ -54,7 +54,7 @@ jobs:
             --output="public/epg/ru/{site}.xml" \
             --gzip \
             --days=2 \
-            --maxConnections=3
+            --maxConnections=1
 
       - name: Verify generated files
         run: |
