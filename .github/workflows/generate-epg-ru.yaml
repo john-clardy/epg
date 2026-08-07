@@ -447,7 +447,7 @@ jobs:
             --output="public/epg/ru.xml" \
             --gzip \
             --days=3 \
-            --maxConnections=3
+            --maxConnections=1
 
       # ==========================================================
       # VERIFY GUIDE
