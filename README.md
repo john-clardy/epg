@@ -1,6 +1,4 @@
-# EPG [![update](https://github.com/iptv-org/epg/actions/workflows/update.yml/badge.svg)](https://github.com/iptv-org/epg/actions/workflows/update.yml)
-[![Generate EPG RU](https://github.com/john-clardy/epg/actions/workflows/generate-epg-ru.yaml/badge.svg)](https://github.com/john-clardy/epg/actions/workflows/generate-epg-ru.yaml)
-[![Generate EPG US](https://github.com/john-clardy/epg/actions/workflows/generate-epg-us.yaml/badge.svg)](https://github.com/john-clardy/epg/actions/workflows/generate-epg-us.yaml)
+# EPG [![update](https://github.com/iptv-org/epg/actions/workflows/update.yml/badge.svg)](https://github.com/iptv-org/epg/actions/workflows/update.yml)[![Generate EPG US](https://github.com/john-clardy/epg/actions/workflows/generate-epg-us.yaml/badge.svg)](https://github.com/john-clardy/epg/actions/workflows/generate-epg-us.yaml)[![Generate EPG RU](https://github.com/john-clardy/epg/actions/workflows/generate-epg-ru.yaml/badge.svg)](https://github.com/john-clardy/epg/actions/workflows/generate-epg-ru.yaml)
 
 Tools for downloading the EPG (Electronic Program Guide) for thousands of TV channels from hundreds of sources.
 
