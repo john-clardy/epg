@@ -214,9 +214,9 @@ jobs:
 
               site = site_from_path(path)
 
-               if site in BLACKLISTED_SITES:
-                  print(f"Skipping broken site: {site}")
-                  continue
+              if site in BLACKLISTED_SITES:
+                print(f"Skipping broken site: {site}")
+                continue
 
               try:
                   tree = ET.parse(path)
