@@ -53,7 +53,8 @@ jobs:
             --sites="$EPG_SITES_RU" \
             --output="public/epg/ru/{site}.xml" \
             --gzip \
-            --maxConnections=5
+            --days=2 \
+            --maxConnections=1
 
       - name: Verify generated files
         run: |
