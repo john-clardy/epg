@@ -541,7 +541,9 @@ jobs:
           else
             git commit -m "Update RU EPG"
             echo "Discarding unrelated working-tree changes..."
-            git reset --hard HEAD
+            git stash push --include-untracked -m "temporary workflow changes"
+            echo "Working tree after stash:"
+            git status --short
             git fetch origin master
             git rebase origin/master
             git push origin HEAD:master
