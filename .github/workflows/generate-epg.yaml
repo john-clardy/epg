@@ -456,6 +456,8 @@ jobs:
       # ==========================================================
 
       - name: Generate US EPG
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: |
           time npm run grab -- \
             --channels="temp/us.channels.xml" \
