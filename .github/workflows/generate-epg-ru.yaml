@@ -540,11 +540,18 @@ jobs:
             echo "No EPG changes to commit."
           else
             git commit -m "Update RU EPG"
+            # npm/grabber modifies a large number of repository files.
+            # They are not part of the generated EPG, so discard them.
             echo "Discarding unrelated working-tree changes..."
-            git stash push --include-untracked -m "temporary workflow changes"
-            echo "Working tree after stash:"
+            git reset --hard HEAD
+            git clean -fd
+
+            echo "Working tree before sync:"
             git status --short
+
+            # Sync with any commits that landed while this workflow ran.
             git fetch origin master
             git rebase origin/master
+
             git push origin HEAD:master
           fi
