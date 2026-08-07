@@ -142,6 +142,11 @@ jobs:
               "i.mjh.nz": 50,
           }
 
+          BLACKLISTED_SITES = {
+              "tvtv.us",
+              "tvprofil.com",
+          }
+
           def site_from_path(path):
 
               parts = path.parts
@@ -208,6 +213,10 @@ jobs:
           for path in all_files:
 
               site = site_from_path(path)
+
+               if site in BLACKLISTED_SITES:
+                  print(f"Skipping broken site: {site}")
+                  continue
 
               try:
                   tree = ET.parse(path)
@@ -441,6 +450,8 @@ jobs:
       # ==========================================================
 
       - name: Generate RU EPG
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: |
           time npm run grab -- \
             --channels="temp/ru.channels.xml" \
