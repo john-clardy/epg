@@ -55,17 +55,6 @@ jobs:
 
       # ==========================================================
       # BUILD CUSTOM CHANNEL LIST
-      #
-      # Priority:
-      #
-      # 1. TVPassport
-      # 2. Pluto
-      # 3. Plex
-      # 4. Xumo
-      # 5. DistroTV
-      #
-      # Once a tvg-id is matched, lower-priority sources will
-      # not be used for that same channel.
       # ==========================================================
 
       - name: Build custom RU EPG channel list
@@ -74,6 +63,7 @@ jobs:
           python3 <<'PY'
           import re
           import copy
+          import glob
           import xml.etree.ElementTree as ET
           from pathlib import Path
 
@@ -83,21 +73,7 @@ jobs:
           REPORT = Path("temp/ru.match-report.txt")
 
           # ------------------------------------------------------
-          # EPG sources in priority order
-          # ------------------------------------------------------
-
-          SOURCES = [
-              (
-                  "tv.mail.ru",
-                  Path(
-                      "sites/tv.mail.ru/"
-                      "tv.mail.ru.channels.xml"
-                  )
-              ),
-          ]
-
-          # ------------------------------------------------------
-          # Extract tvg-id values from playlist
+          # Read tvg-id values from RU playlist
           # ------------------------------------------------------
 
           playlist_ids = set()
@@ -126,43 +102,128 @@ jobs:
                   if tvg_id:
                       playlist_ids.add(tvg_id)
 
-          print()
           print(
-              f"Playlist IDs: {len(playlist_ids)}"
+              f"Playlist contains "
+              f"{len(playlist_ids)} unique tvg-id values"
           )
-          print()
 
           if not playlist_ids:
               raise SystemExit(
-                  "ERROR: No tvg-id values found in playlist."
+                  "ERROR: No tvg-id values found."
               )
 
           # ------------------------------------------------------
-          # Match playlist IDs
+          # Find every channels XML in the repository
+          # ------------------------------------------------------
+
+          all_files = [
+              Path(p)
+              for p in glob.glob(
+                  "sites/**/*.channels.xml",
+                  recursive=True
+              )
+          ]
+
+          print(
+              f"Found {len(all_files)} channel-list files"
+          )
+
+          # ------------------------------------------------------
+          # Priority ranking
+          #
+          # Lower number = preferred source
+          # ------------------------------------------------------
+
+          preferred_sites = {
+              "tv.mail.ru": 10,
+              "epg.iptvx.one": 20,
+              "epg.112114.xyz": 30,
+              "epgshare01.online": 40,
+              "i.mjh.nz": 50,
+          }
+
+          def site_from_path(path):
+
+              parts = path.parts
+
+              if len(parts) >= 2:
+                  return parts[1]
+
+              return ""
+
+          def is_ru_file(path):
+
+              name = path.name.lower()
+
+              patterns = [
+                  "_ru.",
+                  "_ru-",
+                  "_ru_",
+                  "russia",
+                  "viva-russia",
+              ]
+
+              return any(
+                  pattern in name
+                  for pattern in patterns
+              )
+
+          def priority(path):
+
+              site = site_from_path(path)
+
+              # ----------------------------------------------
+              # Explicitly preferred US providers
+              # ----------------------------------------------
+
+              base = preferred_sites.get(
+                  site,
+                  1000
+              )
+
+              # ----------------------------------------------
+              # Give US-specific files a major preference
+              # ----------------------------------------------
+
+              if is_ru_file(path):
+                  base -= 500
+
+              return (
+                  base,
+                  str(path)
+              )
+
+          all_files.sort(
+              key=priority
+          )
+
+          # ------------------------------------------------------
+          # Match channels
           # ------------------------------------------------------
 
           matched = {}
-          stats = {}
+          provider_stats = {}
+          file_stats = {}
 
-          for site, path in SOURCES:
+          for path in all_files:
 
-              if not path.exists():
+              site = site_from_path(path)
+
+              try:
+                  tree = ET.parse(path)
+
+              except Exception as error:
 
                   print(
-                      f"WARNING: {path} does not exist."
+                      f"WARNING: Could not parse "
+                      f"{path}: {error}"
                   )
 
-                  stats[site] = 0
                   continue
 
-              print(
-                  f"Scanning {site}..."
-              )
-
-              tree = ET.parse(path)
               root = tree.getroot()
 
-              count = 0
+              added = 0
 
               for channel in root.findall("channel"):
 
@@ -173,30 +234,31 @@ jobs:
                   if not xmltv_id:
                       continue
 
-                  # Not in the IPTV playlist
+                  # Not present in our US playlist
                   if xmltv_id not in playlist_ids:
                       continue
 
-                  # Already supplied by a higher-priority
-                  # provider.
+                  # Already found from a higher-priority source
                   if xmltv_id in matched:
                       continue
 
                   matched[xmltv_id] = (
                       site,
+                      path,
                       copy.deepcopy(channel)
                   )
 
-                  count += 1
+                  added += 1
 
-              stats[site] = count
+                  provider_stats[site] = (
+                      provider_stats.get(site, 0) + 1
+                  )
 
-              print(
-                  f"  Added {count} channels"
-              )
+              if added:
+                  file_stats[str(path)] = added
 
           # ------------------------------------------------------
-          # Determine unmatched channels
+          # Unmatched playlist channels
           # ------------------------------------------------------
 
           unmatched = sorted(
@@ -204,25 +266,22 @@ jobs:
           )
 
           # ------------------------------------------------------
-          # Write combined channels XML
+          # Create one combined custom channels XML
           # ------------------------------------------------------
 
-          output_root = ET.Element("channels")
+          output_root = ET.Element(
+              "channels"
+          )
 
           for xmltv_id in sorted(matched):
 
-              site, channel = matched[xmltv_id]
+              site, path, channel = matched[
+                  xmltv_id
+              ]
 
-              # The original channel already contains:
-              #
-              # site
-              # lang
-              # xmltv_id
-              # site_id
-              #
-              # Preserve all of it.
-
-              output_root.append(channel)
+              output_root.append(
+                  channel
+              )
 
           ET.indent(
               output_root,
@@ -258,7 +317,7 @@ jobs:
           )
 
           # ------------------------------------------------------
-          # Write report
+          # Build report
           # ------------------------------------------------------
 
           report = []
@@ -267,47 +326,63 @@ jobs:
               f"Playlist channels: {len(playlist_ids)}"
           )
 
+          report.append(
+              f"Matched channels: {len(matched)}"
+          )
+
+          report.append(
+              f"Unmatched channels: {len(unmatched)}"
+          )
+
+          report.append("")
+          report.append("Channels by EPG source:")
           report.append("")
 
-          for site, _ in SOURCES:
+          for site, count in sorted(
+              provider_stats.items(),
+              key=lambda x: x[1],
+              reverse=True
+          ):
 
               report.append(
-                  f"{site}: {stats.get(site, 0)}"
+                  f"{site}: {count}"
               )
 
           report.append("")
-
           report.append(
-              f"Total matched: {len(matched)}"
+              "Channel-list files actually used:"
           )
 
-          report.append(
-              f"Total unmatched: {len(unmatched)}"
-          )
+          report.append("")
+
+          for path, count in sorted(
+              file_stats.items(),
+              key=lambda x: x[1],
+              reverse=True
+          ):
+
+              report.append(
+                  f"{count:5}  {path}"
+              )
 
           REPORT.write_text(
               "\n".join(report) + "\n",
               encoding="utf-8"
           )
 
-          # ------------------------------------------------------
-          # Console summary
-          # ------------------------------------------------------
-
           print()
-          print("=" * 60)
-          print("MATCH RESULTS")
-          print("=" * 60)
+          print("=" * 70)
+          print("US EPG MATCH REPORT")
+          print("=" * 70)
 
           for line in report:
               print(line)
 
-          print("=" * 60)
+          print("=" * 70)
 
           if not matched:
               raise SystemExit(
-                  "ERROR: No playlist channels matched "
-                  "any EPG source."
+                  "ERROR: No EPG channels matched."
               )
 
           PY
