@@ -468,34 +468,19 @@ jobs:
 
       - name: Commit EPG
         run: |
-          git config \
-            user.name \
-            "github-actions[bot]"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git config \
-            user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
+          echo "Working tree before commit:"
+          git status --short
 
           git add \
             public/epg/us.xml \
             public/epg/us.xml.gz
 
           if git diff --cached --quiet; then
-
             echo "No EPG changes to commit."
-
           else
-
-            git commit \
-              -m "Update US EPG"
-
-            git pull \
-              --rebase \
-              origin \
-              master
-
-            git push \
-              origin \
-              HEAD:master
-
+            git commit -m "Update US EPG"
+            git push origin HEAD:master
           fi
