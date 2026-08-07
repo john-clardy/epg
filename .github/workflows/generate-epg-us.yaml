@@ -541,32 +541,50 @@ jobs:
 
       - name: Commit EPG
         run: |
+          set -e
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          echo "Working tree before commit:"
+          echo "Saving generated EPG..."
+
+          cp public/epg/us.xml /tmp/us.xml
+          cp public/epg/us.xml.gz /tmp/us.xml.gz
+
+          # Give any child/background processes from the grab a moment to exit.
+          sleep 5
+
+          echo "Resetting repository..."
+          git reset --hard
+          git clean -fd
+
+          echo "Fetching latest master..."
+          git fetch origin master
+
+          # Do NOT rebase the dirty/generated checkout.
+          # Move directly to current remote master.
+          git reset --hard origin/master
+          git clean -fd
+
+          echo "Restoring generated EPG..."
+          mkdir -p public/epg
+          cp /tmp/us.xml public/epg/us.xml
+          cp /tmp/us.xml.gz public/epg/us.xml.gz
+
+          echo "Changes to commit:"
           git status --short
 
-          git add \
-            public/epg/us.xml \
-            public/epg/us.xml.gz
+          git add public/epg/us.xml public/epg/us.xml.gz
 
           if git diff --cached --quiet; then
             echo "No EPG changes to commit."
-          else
-            git commit -m "Update US EPG"
-            # npm/grabber modifies a large number of repository files.
-            # They are not part of the generated EPG, so discard them.
-            echo "Discarding unrelated working-tree changes..."
-            git reset --hard HEAD
-            git clean -fd
-
-            echo "Working tree before sync:"
-            git status --short
-
-            # Sync with any commits that landed while this workflow ran.
-            git fetch origin master
-            git rebase origin/master
-
-            git push origin HEAD:master
+            exit 0
           fi
+
+          git commit -m "Update US EPG"
+
+          echo "Final commit:"
+          git show --stat --oneline HEAD
+
+          git push origin HEAD:master
+
