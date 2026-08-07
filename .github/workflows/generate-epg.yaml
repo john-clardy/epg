@@ -53,7 +53,7 @@ jobs:
             --sites="$EPG_SITES" \
             --output="public/epg/{site}.xml" \
             --gzip \
-            --maxConnections=10
+            --maxConnections=5
 
       - name: Verify generated files
         run: |
